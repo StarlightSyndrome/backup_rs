@@ -1,7 +1,7 @@
 use std::{
-    process::{Command, Stdio},
+    process::{Command, ExitCode},
     fs::{read_dir, DirEntry},
-    path::MAIN_SEPARATOR, 
+    path::{Path, }, 
 };
 use anyhow::{Result, ensure, format_err};
 use chrono::prelude::*;
@@ -28,7 +28,7 @@ struct Cli {
 
 
 
-fn run_rsync(cli: &mut Cli) -> Result<()> {
+fn run_rsync(cli: &mut Cli) -> Result<ExitCode> {
     
     let mut args: Vec<&str> = vec!["-ax", "--stats"];
     
@@ -54,22 +54,21 @@ fn run_rsync(cli: &mut Cli) -> Result<()> {
     args.push(&cli.source_dir);
     args.push(&cli.target_dir);
 
+    println!("Running rsync {}", args.join(" "));
 
-    let child = Command::new("rsync")
+    let output = Command::new("rsync")
         .args(args.as_slice())
-        .stdout(Stdio::piped())
-        .spawn()?;
+        .output()?;
 
-    let  output = child.wait_with_output().expect("no output");
+    println!("Status {}", output.status);
+    let exit_code = output.status.code().unwrap() as u8;
+    if exit_code != 0 {
+        println!("{}", String::from_utf8_lossy(&output.stderr));
+    } else {
+        println!("{}", String::from_utf8_lossy(&output.stdout));
+    }
 
-
-    println!("{}", std::str::from_utf8(output.stdout.as_slice()).unwrap());
-    //match child.code() {
-    //    Some(code) => println!("Exited with exit code {}", code),
-    //    None => println!("Process terminated by signal"),
-    //}
-
-    Ok(())
+    Ok(ExitCode::from(exit_code))
 }
 
 fn dirname_is_valid_date(read_dir: std::io::Result<DirEntry>) -> Result<String> {
@@ -98,22 +97,24 @@ fn prepare_versioning(cli: &mut Cli, other_args: &mut Vec<String>) -> Result<()>
     //build target dir from date and time for versioned backups 
     let now = Local::now();
     let now_dir = format!("{}", now.format("%Y%m%d%H%M"));
-
     
-    cli.target_dir.push(MAIN_SEPARATOR);
-    cli.target_dir.push_str(&now_dir);
+    let target_dir = cli.target_dir.to_owned();
+    cli.target_dir = Path::new(&target_dir)
+        .join(now_dir).to_string_lossy().to_string();
 
-    let link_dest: String;
     if dirs.len() > 1 {
         dirs.sort();
-        link_dest = format!("--link-dest={}", dirs.pop().unwrap());
-        other_args.push(link_dest);
+        other_args.push(
+            format!("--link-dest={}", Path::new(&target_dir)
+            .join(dirs.pop().unwrap())
+            .to_str().unwrap())
+        );
     }
     Ok(())
 }
 
 
-fn main() -> Result<()>  {
+fn main() -> Result<ExitCode> {
     let mut cli = Cli::parse();
     run_rsync(&mut cli)
 }
