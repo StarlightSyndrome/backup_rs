@@ -1,10 +1,14 @@
 use std::{
-    process::{Command, ExitCode},
+    process::{Stdio, ExitCode, ExitStatus},
     fs::{read_dir, DirEntry},
     path::{Path, }, 
 };
 use anyhow::{Result, ensure, format_err};
 use chrono::prelude::*;
+use tokio::io::{BufReader, AsyncBufReadExt};
+use tokio::process::Command;
+
+
 
 
 use clap::Parser;
@@ -28,7 +32,7 @@ struct Cli {
 
 
 
-fn run_rsync(cli: &mut Cli) -> Result<ExitCode> {
+async fn run_rsync(cli: &mut Cli) -> Result<ExitCode> {
     
     let mut args: Vec<&str> = vec!["-ax", "--stats"];
     
@@ -56,19 +60,29 @@ fn run_rsync(cli: &mut Cli) -> Result<ExitCode> {
 
     println!("Running rsync {}", args.join(" "));
 
-    let output = Command::new("rsync")
+    let mut child = Command::new("rsync")
         .args(args.as_slice())
-        .output()?;
+        .stdout(Stdio::piped())
+        .spawn()?;
 
-    println!("Status {}", output.status);
-    let exit_code = output.status.code().unwrap() as u8;
-    if exit_code != 0 {
-        println!("{}", String::from_utf8_lossy(&output.stderr));
-    } else {
-        println!("{}", String::from_utf8_lossy(&output.stdout));
+    let stdout = child.stdout.take()
+        .expect("cannot read stdout");
+
+    let mut reader = BufReader::new(stdout).lines();
+    
+    let mut status = ExitStatus::from(0);    
+    tokio::spawn(async move {
+        status = child.wait().await
+            .expect("process error");
+
+        println!("child status was: {}", status);
+    });
+
+    while let Some(line) = reader.next_line().await? {
+        println!("Line: {}", line);
     }
 
-    Ok(ExitCode::from(exit_code))
+    Ok(ExitCode::from(status.code().unwrap() as u8))
 }
 
 fn dirname_is_valid_date(read_dir: std::io::Result<DirEntry>) -> Result<String> {
@@ -114,7 +128,8 @@ fn prepare_versioning(cli: &mut Cli, other_args: &mut Vec<String>) -> Result<()>
 }
 
 
-fn main() -> Result<ExitCode> {
+#[tokio::main]
+async fn main() -> Result<ExitCode> {
     let mut cli = Cli::parse();
     run_rsync(&mut cli)
 }
