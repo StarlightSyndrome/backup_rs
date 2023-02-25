@@ -1,8 +1,10 @@
 use std::{
     process::{Stdio, ExitCode, ExitStatus},
     fs::{read_dir, DirEntry},
-    path::{Path, }, 
+    path::{Path, },
 };
+use std::str;
+
 use anyhow::{Result, ensure, format_err};
 use chrono::prelude::*;
 use tokio::io::{BufReader, AsyncBufReadExt};
@@ -34,7 +36,7 @@ struct Cli {
 
 async fn run_rsync(cli: &mut Cli) -> Result<ExitStatus> {
     
-    let mut args: Vec<&str> = vec!["-ax", "--stats"];
+    let mut args: Vec<&str> = vec!["-axP", "--stats"];
     
     let mut other_args: Vec<String> = Vec::new();
     if cli.versioned {
@@ -68,7 +70,8 @@ async fn run_rsync(cli: &mut Cli) -> Result<ExitStatus> {
     let stdout = child.stdout.take()
         .expect("cannot read stdout");
 
-    let mut reader = BufReader::new(stdout).lines();
+    let mut reader = BufReader::new(stdout)
+        .split(0x0d);
     
     let exit_status = tokio::spawn(async move {
         let status = child.wait().await
@@ -79,9 +82,25 @@ async fn run_rsync(cli: &mut Cli) -> Result<ExitStatus> {
         status
     });
 
-    while let Some(line) = reader.next_line().await? {
-        println!("Line: {}", line);
+    
+    while let Some(segment) = reader.next_segment().await? {
+        if segment.is_empty() {
+            break;
+        }
+        let parts = segment
+            .split(|x| *x==0x0au8)
+            .collect::<Vec<&[u8]>>();
+
+        if parts.len() == 1 {
+            println!("Progress: {}", std::str::from_utf8(parts[0])?);
+        } else {
+            for p in parts {
+                let line = std::str::from_utf8(p)?;
+                println!("Line: {}", line);
+            }
+        }
     }
+
 
     Ok(exit_status.await.unwrap())
 }
