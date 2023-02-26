@@ -1,9 +1,12 @@
+#![feature(iterator_try_collect)]
+
 use std::{
     process::{Stdio, ExitCode, ExitStatus},
     fs::{read_dir, DirEntry},
     path::{Path, },
+    str,
 };
-use std::str;
+
 
 use anyhow::{Result, ensure, format_err};
 use chrono::prelude::*;
@@ -40,7 +43,7 @@ async fn run_rsync(cli: &mut Cli) -> Result<ExitStatus> {
     
     let mut other_args: Vec<String> = Vec::new();
     if cli.versioned {
-        prepare_versioning(cli, &mut other_args)?;
+        make_versioned_dir(cli, &mut other_args)?;
         args.extend(other_args.iter().map(|x|x.as_str()));
     }
     if ! cli.no_exclude_caches {
@@ -70,6 +73,8 @@ async fn run_rsync(cli: &mut Cli) -> Result<ExitStatus> {
     let stdout = child.stdout.take()
         .expect("cannot read stdout");
 
+    // rsync progress prints and updates state in one line using carriage return 0x0d
+    // so we split on CR first. Look for newline later
     let mut reader = BufReader::new(stdout)
         .split(0x0d);
     
@@ -101,12 +106,10 @@ async fn run_rsync(cli: &mut Cli) -> Result<ExitStatus> {
         }
     }
 
-
     Ok(exit_status.await.unwrap())
 }
 
-fn dirname_is_valid_date(read_dir: std::io::Result<DirEntry>) -> Result<String> {
-    let dir_entry = read_dir.expect("Reading target dir failed");
+fn dirname_is_valid_date(dir_entry: DirEntry) -> Result<String> {
     let dirname = dir_entry.file_name().into_string().unwrap();
 
     ensure!(dir_entry.file_type().unwrap().is_dir(), 
@@ -117,16 +120,13 @@ fn dirname_is_valid_date(read_dir: std::io::Result<DirEntry>) -> Result<String> 
     Ok(dirname)
 }
 
-fn prepare_versioning(cli: &mut Cli, other_args: &mut Vec<String>) -> Result<()>   {
+fn make_versioned_dir(cli: &mut Cli, other_args: &mut Vec<String>) -> Result<()>   {
     // get latest backup in target dir
     // versioned dirs are datetime: YYYYmmddhhmm
-    let mut dirs: Vec<String> = read_dir(&cli.target_dir)
-        .expect("cannot list dir")
-        .map(|d| dirname_is_valid_date(d).unwrap())
-        //.filter_map(|d| d.ok())
-        //.filter_map(|x|is_valid_date(&x).ok())
-        //.filter_map(|x|x.file_name().into_string().ok())
-        .collect();
+    let mut dirs: Vec<String> = read_dir(&cli.target_dir)?
+        .map(|d| dirname_is_valid_date(d?))
+        .try_collect::<_>()?;
+        
    
     //build target dir from date and time for versioned backups 
     let now = Local::now();
