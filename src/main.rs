@@ -32,7 +32,7 @@ struct Cli {
 
 
 
-async fn run_rsync(cli: &mut Cli) -> Result<ExitCode> {
+async fn run_rsync(cli: &mut Cli) -> Result<ExitStatus> {
     
     let mut args: Vec<&str> = vec!["-ax", "--stats"];
     
@@ -70,19 +70,20 @@ async fn run_rsync(cli: &mut Cli) -> Result<ExitCode> {
 
     let mut reader = BufReader::new(stdout).lines();
     
-    let mut status = ExitStatus::from(0);    
-    tokio::spawn(async move {
-        status = child.wait().await
-            .expect("process error");
+    let exit_status = tokio::spawn(async move {
+        let status = child.wait().await
+            .expect("process did not return status");
 
-        println!("child status was: {}", status);
+        println!("child exit code was: {}", status.code().unwrap_or_default());
+        
+        status
     });
 
     while let Some(line) = reader.next_line().await? {
         println!("Line: {}", line);
     }
 
-    Ok(ExitCode::from(status.code().unwrap() as u8))
+    Ok(exit_status.await.unwrap())
 }
 
 fn dirname_is_valid_date(read_dir: std::io::Result<DirEntry>) -> Result<String> {
@@ -131,5 +132,11 @@ fn prepare_versioning(cli: &mut Cli, other_args: &mut Vec<String>) -> Result<()>
 #[tokio::main]
 async fn main() -> Result<ExitCode> {
     let mut cli = Cli::parse();
-    run_rsync(&mut cli)
+
+    let status = run_rsync(&mut cli).await;
+
+    match status {
+        Ok(exit_status) => Ok(ExitCode::from(exit_status.code().unwrap() as u8)),
+        Err(e) => Err(e)
+    }
 }
